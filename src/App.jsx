@@ -11,13 +11,12 @@ const LAP_DURATION = "30s";
 // perpendicular to the path don't clip on the viewBox edges.
 const PAD = 60;
 
-// LogoText.png is 673x293 native. Render it slightly wider than the body
-// of the knife so it reads as the focal element, and centre it on the canvas.
+// LogoText.png is 673x293 native. Default render width is roughly the
+// inner-body width of the knife; user can resize live via the slider.
 const LOGO_NATIVE = { w: 673, h: 293 };
-const LOGO_WIDTH = 600;
-const LOGO_HEIGHT = LOGO_WIDTH * (LOGO_NATIVE.h / LOGO_NATIVE.w);
-const LOGO_X = (662 - LOGO_WIDTH) / 2;
-const LOGO_Y = (636 - LOGO_HEIGHT) / 2;
+const LOGO_DEFAULT_WIDTH = 600;
+const LOGO_MIN_WIDTH = 200;
+const LOGO_MAX_WIDTH = 900;
 
 // Cormorant Garamond is a refined, high-contrast serif with strong x-height
 // and round terminals; it stays legible at 33 px on a curving textPath.
@@ -26,6 +25,11 @@ const TEXT_FONT =
 
 export default function App() {
   const [showGuides, setShowGuides] = useState(true);
+  const [logoWidth, setLogoWidth] = useState(LOGO_DEFAULT_WIDTH);
+
+  const logoHeight = logoWidth * (LOGO_NATIVE.h / LOGO_NATIVE.w);
+  const logoX = (662 - logoWidth) / 2;
+  const logoY = (636 - logoHeight) / 2;
 
   return (
     <div
@@ -38,28 +42,59 @@ export default function App() {
         position: "relative",
       }}
     >
-      <label
+      <div
         style={{
           position: "absolute",
           top: 20,
           right: 24,
-          display: "inline-flex",
-          alignItems: "center",
-          gap: 8,
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "flex-end",
+          gap: 12,
           fontFamily: TEXT_FONT,
           fontSize: 16,
           color: "#222",
           userSelect: "none",
-          cursor: "pointer",
         }}
       >
-        <input
-          type="checkbox"
-          checked={showGuides}
-          onChange={(e) => setShowGuides(e.target.checked)}
-        />
-        Show silhouette &amp; outline
-      </label>
+        <label
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 8,
+            cursor: "pointer",
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={showGuides}
+            onChange={(e) => setShowGuides(e.target.checked)}
+          />
+          Show silhouette &amp; outline
+        </label>
+
+        <label
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 8,
+          }}
+        >
+          <span>Logo size</span>
+          <input
+            type="range"
+            min={LOGO_MIN_WIDTH}
+            max={LOGO_MAX_WIDTH}
+            step={5}
+            value={logoWidth}
+            onChange={(e) => setLogoWidth(Number(e.target.value))}
+            style={{ width: 160 }}
+          />
+          <span style={{ fontVariantNumeric: "tabular-nums", minWidth: 40 }}>
+            {Math.round(logoWidth)}
+          </span>
+        </label>
+      </div>
 
       <svg
         viewBox={`-${PAD} -${PAD} ${662 + PAD * 2} ${636 + PAD * 2}`}
@@ -146,10 +181,10 @@ export default function App() {
         {/* Logo overlay — rendered last so it sits above the moving text. */}
         <image
           href="/LogoText.png"
-          x={LOGO_X}
-          y={LOGO_Y}
-          width={LOGO_WIDTH}
-          height={LOGO_HEIGHT}
+          x={logoX}
+          y={logoY}
+          width={logoWidth}
+          height={logoHeight}
           preserveAspectRatio="xMidYMid meet"
         />
       </svg>
