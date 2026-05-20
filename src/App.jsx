@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { OUTLINE_D, OUTLINE_OFFSET } from "./outlinePath.js";
 
 const SENTENCE =
@@ -10,7 +11,22 @@ const LAP_DURATION = "30s";
 // perpendicular to the path don't clip on the viewBox edges.
 const PAD = 60;
 
+// LogoText.png is 673x293 native. Render it slightly wider than the body
+// of the knife so it reads as the focal element, and centre it on the canvas.
+const LOGO_NATIVE = { w: 673, h: 293 };
+const LOGO_WIDTH = 600;
+const LOGO_HEIGHT = LOGO_WIDTH * (LOGO_NATIVE.h / LOGO_NATIVE.w);
+const LOGO_X = (662 - LOGO_WIDTH) / 2;
+const LOGO_Y = (636 - LOGO_HEIGHT) / 2;
+
+// Cormorant Garamond is a refined, high-contrast serif with strong x-height
+// and round terminals; it stays legible at 33 px on a curving textPath.
+const TEXT_FONT =
+  '"Cormorant Garamond", "EB Garamond", Georgia, "Times New Roman", serif';
+
 export default function App() {
+  const [showGuides, setShowGuides] = useState(true);
+
   return (
     <div
       style={{
@@ -19,8 +35,32 @@ export default function App() {
         placeItems: "center",
         padding: "2rem",
         boxSizing: "border-box",
+        position: "relative",
       }}
     >
+      <label
+        style={{
+          position: "absolute",
+          top: 20,
+          right: 24,
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 8,
+          fontFamily: TEXT_FONT,
+          fontSize: 16,
+          color: "#222",
+          userSelect: "none",
+          cursor: "pointer",
+        }}
+      >
+        <input
+          type="checkbox"
+          checked={showGuides}
+          onChange={(e) => setShowGuides(e.target.checked)}
+        />
+        Show silhouette &amp; outline
+      </label>
+
       <svg
         viewBox={`-${PAD} -${PAD} ${662 + PAD * 2} ${636 + PAD * 2}`}
         width="min(95vw, 980px)"
@@ -29,48 +69,45 @@ export default function App() {
         aria-label="Swiss-army knife outlined by a sentence about creativity and curiosity, looping continuously around the silhouette"
       >
         <defs>
-          {/*
-            Smoothed outer silhouette. Path coordinates start near (0, 0)
-            and are positioned on the canvas via the wrapping <g transform>.
-          */}
           <path id="knife-outline" d={OUTLINE_D} />
         </defs>
 
-        {/* Faint reference image so the silhouette stays recognisable. */}
-        <image href="/swiss-knife.png" width="662" height="636" opacity="0.08" />
+        {/* Faint reference image — toggleable. */}
+        {showGuides && (
+          <image
+            href="/swiss-knife.png"
+            width="662"
+            height="636"
+            opacity="0.08"
+          />
+        )}
 
         <g transform={`translate(${OUTLINE_OFFSET.x}, ${OUTLINE_OFFSET.y})`}>
-          {/* Subtle stroke so the contour stays visible where text is sparse. */}
-          <use
-            href="#knife-outline"
-            fill="none"
-            stroke="#1a1a1a"
-            strokeOpacity="0.18"
-            strokeWidth="0.6"
-          />
+          {/* Subtle path stroke — toggleable. */}
+          {showGuides && (
+            <use
+              href="#knife-outline"
+              fill="none"
+              stroke="#1a1a1a"
+              strokeOpacity="0.18"
+              strokeWidth="0.6"
+            />
+          )}
 
           {/*
             ONE sentence, wrapped seamlessly around the closed path using
             two synchronized <textPath> renderers. Each renders the same
-            full sentence; at any moment one of them is fully on the path
-            and the other is entirely off, OR they each render a contiguous
-            slice such that together they show exactly one sentence with
-            the join at the closed-path seam (where path-end = path-start
-            geometrically -> invisible). No duplicate sentence ever appears
-            on screen.
-
-            Mechanism: textPath B's startOffset is always (textPath A's
-            startOffset minus 100%), which equals "one path length earlier".
-            Because the path is closed, that's the same point in space, so
-            characters that spill off the end of A are rendered by B at the
-            start of the path, perfectly continuing the line.
+            full sentence; B's startOffset is always (A's startOffset
+            minus one path-length), which on a closed path is the same
+            point in space, so characters that spill off A's end re-enter
+            via B's start. No second sentence ever appears on screen.
           */}
           <text
-            fontFamily='ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif'
+            fontFamily={TEXT_FONT}
             fontSize="33"
             fontWeight="500"
-            fill="#111"
-            letterSpacing="0.2"
+            fill="#d30000"
+            letterSpacing="0.3"
           >
             <textPath href="#knife-outline" startOffset="100%">
               <animate
@@ -86,11 +123,11 @@ export default function App() {
           </text>
 
           <text
-            fontFamily='ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif'
+            fontFamily={TEXT_FONT}
             fontSize="33"
             fontWeight="500"
-            fill="#111"
-            letterSpacing="0.2"
+            fill="#d30000"
+            letterSpacing="0.3"
           >
             <textPath href="#knife-outline" startOffset="0%">
               <animate
@@ -105,6 +142,16 @@ export default function App() {
             </textPath>
           </text>
         </g>
+
+        {/* Logo overlay — rendered last so it sits above the moving text. */}
+        <image
+          href="/LogoText.png"
+          x={LOGO_X}
+          y={LOGO_Y}
+          width={LOGO_WIDTH}
+          height={LOGO_HEIGHT}
+          preserveAspectRatio="xMidYMid meet"
+        />
       </svg>
     </div>
   );
