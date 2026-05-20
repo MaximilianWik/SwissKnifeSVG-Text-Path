@@ -4,13 +4,22 @@ import { OUTLINE_D, OUTLINE_OFFSET } from "./outlinePath.js";
 const SENTENCE =
   "Chaotic space of creativity & multidisciplinary ideas exploring the limits of the human curiosity.";
 
-// Seconds for one full lap around the silhouette.
-const LAP_DURATION_SEC = 30;
+// ---- Defaults & limits ----------------------------------------------------
+const LAP_DURATION_DEFAULT = 30;     // seconds per lap
+const LAP_DURATION_MIN = 5;
+const LAP_DURATION_MAX = 120;
+
+const FONT_SIZE_DEFAULT = 33;
+const FONT_SIZE_MIN = 10;
+const FONT_SIZE_MAX = 80;
+
+const PATH_SCALE_DEFAULT = 1.0;
+const PATH_SCALE_MIN = 0.4;
+const PATH_SCALE_MAX = 1.4;
 
 // Padding around the 662x636 silhouette so glyphs that stick out
 // perpendicular to the path don't clip on the viewBox edges.
 const PAD = 60;
-
 const CANVAS_W = 662;
 const CANVAS_H = 636;
 
@@ -29,13 +38,9 @@ const TEXT_FONT =
 const FONT_STYLESHEET =
   "https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;1,400&display=swap";
 
-const TEXT_STYLE = {
-  fontFamily: TEXT_FONT,
-  fontSize: 33,
-  fontWeight: 500,
-  fill: "#d30000",
-  letterSpacing: 0.3,
-};
+const TEXT_FILL = "#d30000";
+const TEXT_LETTER_SPACING = 0.3;
+const TEXT_FONT_WEIGHT = 500;
 
 async function blobToDataUrl(blob) {
   return new Promise((resolve, reject) => {
@@ -55,11 +60,33 @@ async function fetchAsDataUrl(url) {
 export default function App() {
   const [showGuides, setShowGuides] = useState(true);
   const [logoWidth, setLogoWidth] = useState(LOGO_DEFAULT_WIDTH);
+  const [fontSize, setFontSize] = useState(FONT_SIZE_DEFAULT);
+  const [pathScale, setPathScale] = useState(PATH_SCALE_DEFAULT);
+  const [lapDurationSec, setLapDurationSec] = useState(LAP_DURATION_DEFAULT);
   const [exporting, setExporting] = useState(false);
 
   const logoHeight = logoWidth * (LOGO_NATIVE.h / LOGO_NATIVE.w);
   const logoX = (CANVAS_W - logoWidth) / 2;
   const logoY = (CANVAS_H - logoHeight) / 2;
+
+  // The path-scale group wraps everything path-related (silhouette image,
+  // outline stroke, both text elements) so the path scales around the
+  // canvas centre. Font size and letter spacing are divided by the scale
+  // inside the group so the outer scale multiplies them back to the user's
+  // chosen values - that way "Path size" and "Font size" are independent.
+  const cx = CANVAS_W / 2;
+  const cy = CANVAS_H / 2;
+  const scaleTransform = `translate(${cx} ${cy}) scale(${pathScale}) translate(${-cx} ${-cy})`;
+  const innerFontSize = fontSize / pathScale;
+  const innerLetterSpacing = TEXT_LETTER_SPACING / pathScale;
+
+  const textStyle = {
+    fontFamily: TEXT_FONT,
+    fontSize: innerFontSize,
+    fontWeight: TEXT_FONT_WEIGHT,
+    fill: TEXT_FILL,
+    letterSpacing: innerLetterSpacing,
+  };
 
   async function handleExport() {
     setExporting(true);
@@ -72,19 +99,20 @@ export default function App() {
       const settings = {
         sentence: SENTENCE,
         fontFamily: TEXT_FONT,
-        fontSize: TEXT_STYLE.fontSize,
-        fontWeight: TEXT_STYLE.fontWeight,
-        letterSpacing: TEXT_STYLE.letterSpacing,
-        fillColor: TEXT_STYLE.fill,
-        lapDurationSeconds: LAP_DURATION_SEC,
+        fontSize,
+        fontWeight: TEXT_FONT_WEIGHT,
+        letterSpacing: TEXT_LETTER_SPACING,
+        fillColor: TEXT_FILL,
+        lapDurationSeconds: lapDurationSec,
+        pathScale,
         viewBoxPadding: PAD,
         canvasWidth: CANVAS_W,
         canvasHeight: CANVAS_H,
         logo: {
-          width: Math.round(logoWidth * 100) / 100,
-          height: Math.round(logoHeight * 100) / 100,
-          x: Math.round(logoX * 100) / 100,
-          y: Math.round(logoY * 100) / 100,
+          width: round2(logoWidth),
+          height: round2(logoHeight),
+          x: round2(logoX),
+          y: round2(logoY),
           nativeWidth: LOGO_NATIVE.w,
           nativeHeight: LOGO_NATIVE.h,
         },
@@ -110,10 +138,10 @@ export default function App() {
         promptForAI:
           "Create a React + Vite project (or use my existing one) and replicate the swiss-knife-textpath artefact described in this JSON. Two ways to do it:\n" +
           "  (A) FAST PATH: write the contents of `componentSource` verbatim to src/App.jsx (it is fully self-contained - path data and both image assets are inlined as data URLs). Add a <link rel=\"stylesheet\" href=\"<fontStylesheetHref>\"> in index.html. Done.\n" +
-          "  (B) STRUCTURED PATH: build the component from `settings`, `path`, and `assets`. Render an SVG with viewBox = `-padding -padding (canvasWidth+2*padding) (canvasHeight+2*padding)`. Define <path id=\"knife-outline\" d={path.d}/> in <defs>. Inside <g transform=\"translate(path.translate.x, path.translate.y)\">, render: optional faint reference <image> of `assets.silhouette.dataUrl` and a subtle <use> stroke (both gated by `settings.showGuides`); then two <text> elements each containing <textPath href=\"#knife-outline\"> with the full sentence. The first textPath has startOffset=\"100%\" and animates startOffset 100%->0%. The second has startOffset=\"0%\" and animates 0%->-100%. Both <animate> elements share dur=`settings.lapDurationSeconds`s, repeatCount=indefinite, and the second's begin attribute references the first animate's id (e.g., begin=\"lap.begin\") to keep them locked together. After the <g>, render the logo <image> with x/y/width/height from `settings.logo`. Wire up state for `showGuides` and a slider for the logo width. Apply text styling from `settings`.\n" +
+          "  (B) STRUCTURED PATH: build the component from `settings`, `path`, and `assets`. Render an SVG with viewBox = `-padding -padding (canvasWidth+2*padding) (canvasHeight+2*padding)`. Define <path id=\"knife-outline\" d={path.d}/> in <defs>. Wrap path-related content in an outer <g> with transform `translate(cx cy) scale(pathScale) translate(-cx -cy)` (where cx=canvasWidth/2, cy=canvasHeight/2). Inside, render the optional faint reference <image> (assets.silhouette.dataUrl, opacity guides.referenceImageOpacity), then a <g transform=\"translate(path.translate.x, path.translate.y)\"> containing: a subtle <use> stroke (gated by showGuides) and two <text> elements each containing <textPath href=\"#knife-outline\">. Important: divide the text element's fontSize and letterSpacing by pathScale before applying them, so the outer scale multiplies them back up to the user's chosen values (path-size and font-size stay independent). The first textPath has startOffset=\"100%\" with <animate> 100%->0%, the second startOffset=\"0%\" with <animate> 0%->-100%. Both <animate> share dur=\"<lapDurationSeconds>s\", repeatCount=indefinite, and the second animate's begin attribute references the first's id (begin=\"lap.begin\") to keep them locked. After the outer scaled <g>, render the logo <image> (assets.logo.dataUrl, x/y/width/height from settings.logo) - it is NOT inside the scaled group so it stays at its own size.\n" +
           "Either way, the result must visually match an SVG that animates a single sentence ('Chaotic space of creativity...') circling the swiss-army-knife silhouette in red Cormorant Garamond, with the logo image overlaid in the centre.",
         kind: "swiss-knife-textpath",
-        version: 1,
+        version: 2,
         createdAt: new Date().toISOString(),
         fontStylesheetHref: FONT_STYLESHEET,
         settings,
@@ -176,12 +204,13 @@ export default function App() {
           right: 24,
           display: "flex",
           flexDirection: "column",
-          alignItems: "flex-end",
-          gap: 12,
+          alignItems: "stretch",
+          gap: 10,
           fontFamily: TEXT_FONT,
           fontSize: 16,
           color: "#222",
           userSelect: "none",
+          minWidth: 280,
         }}
       >
         <label
@@ -200,27 +229,45 @@ export default function App() {
           Show silhouette &amp; outline
         </label>
 
-        <label
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: 8,
-          }}
-        >
-          <span>Logo size</span>
-          <input
-            type="range"
-            min={LOGO_MIN_WIDTH}
-            max={LOGO_MAX_WIDTH}
-            step={5}
-            value={logoWidth}
-            onChange={(e) => setLogoWidth(Number(e.target.value))}
-            style={{ width: 160 }}
-          />
-          <span style={{ fontVariantNumeric: "tabular-nums", minWidth: 40 }}>
-            {Math.round(logoWidth)}
-          </span>
-        </label>
+        <Slider
+          label="Logo size"
+          min={LOGO_MIN_WIDTH}
+          max={LOGO_MAX_WIDTH}
+          step={5}
+          value={logoWidth}
+          onChange={setLogoWidth}
+          format={(v) => Math.round(v)}
+        />
+
+        <Slider
+          label="Path size"
+          min={PATH_SCALE_MIN}
+          max={PATH_SCALE_MAX}
+          step={0.01}
+          value={pathScale}
+          onChange={setPathScale}
+          format={(v) => `${Math.round(v * 100)}%`}
+        />
+
+        <Slider
+          label="Font size"
+          min={FONT_SIZE_MIN}
+          max={FONT_SIZE_MAX}
+          step={1}
+          value={fontSize}
+          onChange={setFontSize}
+          format={(v) => `${Math.round(v)}px`}
+        />
+
+        <Slider
+          label="Lap speed"
+          min={LAP_DURATION_MIN}
+          max={LAP_DURATION_MAX}
+          step={1}
+          value={lapDurationSec}
+          onChange={setLapDurationSec}
+          format={(v) => `${Math.round(v)}s/lap`}
+        />
 
         <button
           type="button"
@@ -234,6 +281,7 @@ export default function App() {
             borderRadius: 4,
             background: exporting ? "#eee" : "#fff",
             cursor: exporting ? "wait" : "pointer",
+            marginTop: 4,
           }}
         >
           {exporting ? "Exporting..." : "Export current state"}
@@ -251,55 +299,59 @@ export default function App() {
           <path id="knife-outline" d={OUTLINE_D} />
         </defs>
 
-        {showGuides && (
-          <image
-            href="/swiss-knife.png"
-            width={CANVAS_W}
-            height={CANVAS_H}
-            opacity="0.08"
-          />
-        )}
-
-        <g transform={`translate(${OUTLINE_OFFSET.x}, ${OUTLINE_OFFSET.y})`}>
+        <g transform={scaleTransform}>
           {showGuides && (
-            <use
-              href="#knife-outline"
-              fill="none"
-              stroke="#1a1a1a"
-              strokeOpacity="0.18"
-              strokeWidth="0.6"
+            <image
+              href="/swiss-knife.png"
+              width={CANVAS_W}
+              height={CANVAS_H}
+              opacity="0.08"
             />
           )}
 
-          <text {...TEXT_STYLE}>
-            <textPath href="#knife-outline" startOffset="100%">
-              <animate
-                id="lap"
-                attributeName="startOffset"
-                from="100%"
-                to="0%"
-                dur={`${LAP_DURATION_SEC}s`}
-                repeatCount="indefinite"
+          <g transform={`translate(${OUTLINE_OFFSET.x}, ${OUTLINE_OFFSET.y})`}>
+            {showGuides && (
+              <use
+                href="#knife-outline"
+                fill="none"
+                stroke="#1a1a1a"
+                strokeOpacity="0.18"
+                strokeWidth={0.6 / pathScale}
               />
-              {SENTENCE}
-            </textPath>
-          </text>
+            )}
 
-          <text {...TEXT_STYLE}>
-            <textPath href="#knife-outline" startOffset="0%">
-              <animate
-                attributeName="startOffset"
-                from="0%"
-                to="-100%"
-                dur={`${LAP_DURATION_SEC}s`}
-                repeatCount="indefinite"
-                begin="lap.begin"
-              />
-              {SENTENCE}
-            </textPath>
-          </text>
+            <text {...textStyle}>
+              <textPath href="#knife-outline" startOffset="100%">
+                <animate
+                  id="lap"
+                  attributeName="startOffset"
+                  from="100%"
+                  to="0%"
+                  dur={`${lapDurationSec}s`}
+                  repeatCount="indefinite"
+                />
+                {SENTENCE}
+              </textPath>
+            </text>
+
+            <text {...textStyle}>
+              <textPath href="#knife-outline" startOffset="0%">
+                <animate
+                  attributeName="startOffset"
+                  from="0%"
+                  to="-100%"
+                  dur={`${lapDurationSec}s`}
+                  repeatCount="indefinite"
+                  begin="lap.begin"
+                />
+                {SENTENCE}
+              </textPath>
+            </text>
+          </g>
         </g>
 
+        {/* Logo overlay - rendered last so it sits above the moving text.
+            Outside the scaled group so its size is independent. */}
         <image
           href="/LogoText.png"
           x={logoX}
@@ -313,38 +365,74 @@ export default function App() {
   );
 }
 
+function Slider({ label, min, max, step, value, onChange, format }) {
+  return (
+    <label
+      style={{
+        display: "grid",
+        gridTemplateColumns: "auto 1fr auto",
+        alignItems: "center",
+        gap: 8,
+      }}
+    >
+      <span>{label}</span>
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        onChange={(e) => onChange(Number(e.target.value))}
+        style={{ width: "100%" }}
+      />
+      <span style={{ fontVariantNumeric: "tabular-nums", minWidth: 64, textAlign: "right" }}>
+        {format ? format(value) : value}
+      </span>
+    </label>
+  );
+}
+
+function round2(n) {
+  return Math.round(n * 100) / 100;
+}
+
 // ---------------------------------------------------------------------------
 // Self-contained source generator.
 //
 // Emits a single App.jsx that has the path data and both image assets inlined
-// as data URLs, so the receiving project doesn't need any external files
-// beyond the Google Fonts <link>.
+// as data URLs, so the receiving project does not need any external files
+// beyond the Google Fonts <link>. Reflects the live values of all sliders.
 // ---------------------------------------------------------------------------
 function buildComponentSource({ settings, path, logoDataUrl, silhouetteDataUrl }) {
-  const esc = (s) => String(s).replace(/`/g, "\\`").replace(/\$\{/g, "\\${");
-  const sentenceLit = JSON.stringify(settings.sentence);
-  const fontFamilyLit = JSON.stringify(settings.fontFamily);
   return `import { useState } from "react";
 
 // === Generated by swiss-knife-textpath export ===============================
 // All assets and path data are inlined as data URLs / literals, so this file
-// is fully self-contained. Just drop it in as src/App.jsx and add the
-// Google Fonts <link> to index.html (see indexHtmlSnippet in the spec JSON).
+// is fully self-contained. Drop it in as src/App.jsx and add the Google
+// Fonts <link> to index.html (see indexHtmlSnippet in the spec JSON).
 // ============================================================================
 
-const SENTENCE = ${sentenceLit};
+const SENTENCE = ${JSON.stringify(settings.sentence)};
 const LAP_DURATION_SEC = ${settings.lapDurationSeconds};
 const PAD = ${settings.viewBoxPadding};
 const CANVAS_W = ${settings.canvasWidth};
 const CANVAS_H = ${settings.canvasHeight};
+const PATH_SCALE = ${settings.pathScale};
 
-const TEXT_FONT = ${fontFamilyLit};
+const TEXT_FONT = ${JSON.stringify(settings.fontFamily)};
+const USER_FONT_SIZE = ${settings.fontSize};
+const USER_LETTER_SPACING = ${settings.letterSpacing};
+
+// Compensate for the outer scale so user-facing font/letter values stay constant.
+const INNER_FONT_SIZE = USER_FONT_SIZE / PATH_SCALE;
+const INNER_LETTER_SPACING = USER_LETTER_SPACING / PATH_SCALE;
+
 const TEXT_STYLE = {
   fontFamily: TEXT_FONT,
-  fontSize: ${settings.fontSize},
+  fontSize: INNER_FONT_SIZE,
   fontWeight: ${settings.fontWeight},
   fill: ${JSON.stringify(settings.fillColor)},
-  letterSpacing: ${settings.letterSpacing},
+  letterSpacing: INNER_LETTER_SPACING,
 };
 
 const OUTLINE_D = ${JSON.stringify(path.d)};
@@ -357,6 +445,10 @@ const LOGO = ${JSON.stringify(settings.logo, null, 2)};
 
 export default function App() {
   const [showGuides, setShowGuides] = useState(${settings.showGuides});
+
+  const cx = CANVAS_W / 2;
+  const cy = CANVAS_H / 2;
+  const scaleTransform = \`translate(\${cx} \${cy}) scale(\${PATH_SCALE}) translate(\${-cx} \${-cy})\`;
 
   return (
     <div style={{ minHeight: "100vh", display: "grid", placeItems: "center", padding: "2rem", position: "relative" }}>
@@ -374,48 +466,50 @@ export default function App() {
           <path id="knife-outline" d={OUTLINE_D} />
         </defs>
 
-        {showGuides && (
-          <image href={SILHOUETTE_DATA_URL} width={CANVAS_W} height={CANVAS_H} opacity="${settings.guides.referenceImageOpacity}" />
-        )}
-
-        <g transform={\`translate(\${OUTLINE_OFFSET.x}, \${OUTLINE_OFFSET.y})\`}>
+        <g transform={scaleTransform}>
           {showGuides && (
-            <use
-              href="#knife-outline"
-              fill="none"
-              stroke="${settings.guides.pathStrokeColor}"
-              strokeOpacity="${settings.guides.pathStrokeOpacity}"
-              strokeWidth="${settings.guides.pathStrokeWidth}"
-            />
+            <image href={SILHOUETTE_DATA_URL} width={CANVAS_W} height={CANVAS_H} opacity="${settings.guides.referenceImageOpacity}" />
           )}
 
-          <text {...TEXT_STYLE}>
-            <textPath href="#knife-outline" startOffset="100%">
-              <animate
-                id="lap"
-                attributeName="startOffset"
-                from="100%"
-                to="0%"
-                dur={\`\${LAP_DURATION_SEC}s\`}
-                repeatCount="indefinite"
+          <g transform={\`translate(\${OUTLINE_OFFSET.x}, \${OUTLINE_OFFSET.y})\`}>
+            {showGuides && (
+              <use
+                href="#knife-outline"
+                fill="none"
+                stroke="${settings.guides.pathStrokeColor}"
+                strokeOpacity="${settings.guides.pathStrokeOpacity}"
+                strokeWidth={${settings.guides.pathStrokeWidth} / PATH_SCALE}
               />
-              {SENTENCE}
-            </textPath>
-          </text>
+            )}
 
-          <text {...TEXT_STYLE}>
-            <textPath href="#knife-outline" startOffset="0%">
-              <animate
-                attributeName="startOffset"
-                from="0%"
-                to="-100%"
-                dur={\`\${LAP_DURATION_SEC}s\`}
-                repeatCount="indefinite"
-                begin="lap.begin"
-              />
-              {SENTENCE}
-            </textPath>
-          </text>
+            <text {...TEXT_STYLE}>
+              <textPath href="#knife-outline" startOffset="100%">
+                <animate
+                  id="lap"
+                  attributeName="startOffset"
+                  from="100%"
+                  to="0%"
+                  dur={\`\${LAP_DURATION_SEC}s\`}
+                  repeatCount="indefinite"
+                />
+                {SENTENCE}
+              </textPath>
+            </text>
+
+            <text {...TEXT_STYLE}>
+              <textPath href="#knife-outline" startOffset="0%">
+                <animate
+                  attributeName="startOffset"
+                  from="0%"
+                  to="-100%"
+                  dur={\`\${LAP_DURATION_SEC}s\`}
+                  repeatCount="indefinite"
+                  begin="lap.begin"
+                />
+                {SENTENCE}
+              </textPath>
+            </text>
+          </g>
         </g>
 
         <image
