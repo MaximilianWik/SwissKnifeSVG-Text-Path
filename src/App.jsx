@@ -3,6 +3,22 @@ import { OUTLINE_D, OUTLINE_OFFSET } from "./outlinePath.js";
 const SENTENCE =
   "Chaotic space of creativity & multidisciplinary ideas exploring the limits of the human curiosity.";
 
+// Decorative separator between repeats. Written as an escape so this file
+// stays pure ASCII on disk (PowerShell file moves can transcode UTF-8 to
+// cp1252 and corrupt fancy glyphs otherwise).
+const SEP = "  \u00B7  "; // space, middle-dot, space
+
+// textPath does NOT wrap when the text overruns the path's end, so a single
+// sentence shorter than the perimeter would visibly clip and snap. Trick:
+// concatenate the sentence twice. The rendered text is now longer than the
+// path, so the path is always fully covered, and animating startOffset
+// 100% -> 0% shifts the whole train by exactly one path-length per cycle.
+// Because the path is closed, that shift is geometrically identity, so the
+// loop is perfectly seamless. Visually you read one sentence circling
+// indefinitely; the second copy is just the seam-hider, off the visible
+// arc most of the time.
+const LOOP_TEXT = SENTENCE + SEP + SENTENCE + SEP;
+
 // Seconds for one full lap around the silhouette. Tweak to taste.
 const LAP_DURATION = "30s";
 
@@ -26,8 +42,8 @@ export default function App() {
       >
         <defs>
           {/*
-            Outer silhouette of the knife. Path coordinates start at (0, 0),
-            so we offset them to the canvas via the wrapping <g transform>.
+            Smoothed outer silhouette. Path coordinates start near (0, 0)
+            and are positioned on the canvas via the wrapping <g transform>.
             textPath references this id and uses the geometry as-is.
           */}
           <path id="knife-outline" d={OUTLINE_D} />
@@ -38,29 +54,19 @@ export default function App() {
           href="/swiss-knife.png"
           width="662"
           height="636"
-          opacity="0.1"
+          opacity="0.08"
         />
 
         <g transform={`translate(${OUTLINE_OFFSET.x}, ${OUTLINE_OFFSET.y})`}>
-          {/* Subtle stroke makes the contour readable when the text is on the
-              far side of the loop. */}
+          {/* Subtle stroke so the contour stays visible where text is sparse. */}
           <use
             href="#knife-outline"
             fill="none"
             stroke="#1a1a1a"
-            strokeOpacity="0.2"
+            strokeOpacity="0.18"
             strokeWidth="0.6"
           />
 
-          {/*
-            One sentence, looping continuously. The path is closed, so the
-            geometric end-point coincides with the start (top-right of the
-            canvas) — animating startOffset from 0% → 100% slides the whole
-            sentence around the silhouette and back to its origin without
-            the head jumping in space. "Chaotic" sits at the leading edge
-            of the sentence in reading order, so it is always the first
-            word to enter a new stretch of the path.
-          */}
           <text
             fontFamily='ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif'
             fontSize="33"
@@ -68,7 +74,12 @@ export default function App() {
             fill="#111"
             letterSpacing="0.2"
           >
-            <textPath href="#knife-outline" startOffset="0%">
+            <textPath href="#knife-outline" startOffset="100%">
+              {/*
+                Reverse direction so motion goes top-right -> up over the
+                top of the knife -> back round, with "Chaotic" at the
+                leading edge of the snake.
+              */}
               <animate
                 attributeName="startOffset"
                 from="100%"
@@ -76,7 +87,7 @@ export default function App() {
                 dur={LAP_DURATION}
                 repeatCount="indefinite"
               />
-              {SENTENCE}
+              {LOOP_TEXT}
             </textPath>
           </text>
         </g>
