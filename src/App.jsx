@@ -71,8 +71,8 @@ export default function App() {
             <textPath href="#knife-outline" startOffset="0%">
               <animate
                 attributeName="startOffset"
-                from="0%"
-                to="100%"
+                from="100%"
+                to="0%"
                 dur={LAP_DURATION}
                 repeatCount="indefinite"
               />
