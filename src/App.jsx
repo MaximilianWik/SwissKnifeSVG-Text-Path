@@ -1,4 +1,4 @@
-﻿import { useState } from "react";
+import { useRef, useState } from "react";
 import { OUTLINE_D, OUTLINE_OFFSET } from "./outlinePath.js";
 
 const SENTENCE =
@@ -54,6 +54,114 @@ async function fetchAsDataUrl(url) {
   return blobToDataUrl(await r.blob());
 }
 
+// ---- GIF export helpers ---------------------------------------------------
+
+const GIF_JS_VERSION = "0.2.0";
+const GIF_WORKER_URL = `https://cdn.jsdelivr.net/npm/gif.js@${GIF_JS_VERSION}/dist/gif.worker.js`;
+
+// Number of frames to capture across one full lap. 80 frames at lap=30s is
+// 2.67 fps - playable; bump if you have a faster lap and want smoother motion.
+const GIF_FRAME_COUNT = 80;
+
+// GIF rendered width in pixels. Height is derived from the SVG's aspect ratio.
+const GIF_OUTPUT_WIDTH = 600;
+
+// Page background colour, painted under each frame so the result matches the
+// app's look (SVG has no background of its own).
+const GIF_BG = "#f4f1ec";
+
+async function inlineFontsCss(stylesheetHref) {
+  const cssText = await fetch(stylesheetHref).then((r) => r.text());
+  // Find every url(...) reference; only fetch the woff2 ones - the browser
+  // already negotiated those via its UA, so they're the ones the live page
+  // is using.
+  const urls = [
+    ...cssText.matchAll(/url\(([^)]+)\)/g),
+  ].map((m) => m[1].replace(/^['"]|['"]$/g, ""));
+  const woff2 = [...new Set(urls.filter((u) => u.endsWith(".woff2")))];
+  const replacements = await Promise.all(
+    woff2.map(async (u) => [u, await fetchAsDataUrl(u)]),
+  );
+  let inlined = cssText;
+  for (const [orig, dataUrl] of replacements) {
+    inlined = inlined.split(orig).join(dataUrl);
+  }
+  return inlined;
+}
+
+async function loadWorkerBlobUrl() {
+  const code = await fetch(GIF_WORKER_URL).then((r) => r.text());
+  return URL.createObjectURL(
+    new Blob([code], { type: "application/javascript" }),
+  );
+}
+
+async function svgStringToImage(svgString) {
+  const blob = new Blob([svgString], {
+    type: "image/svg+xml;charset=utf-8",
+  });
+  const url = URL.createObjectURL(blob);
+  const img = new Image();
+  img.src = url;
+  try {
+    await img.decode();
+  } finally {
+    // Keep the object URL alive until the image is decoded; revoking after
+    // decode is safe because the bitmap is already in memory.
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+  }
+  return img;
+}
+
+function buildFrameSvg({
+  liveSvg,
+  fontCss,
+  logoDataUrl,
+  silhouetteDataUrl,
+  startOffsetA,
+  startOffsetB,
+  width,
+  height,
+}) {
+  const clone = liveSvg.cloneNode(true);
+  clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+  clone.setAttribute("xmlns:xlink", "http://www.w3.org/1999/xlink");
+  clone.setAttribute("width", String(width));
+  clone.setAttribute("height", String(height));
+
+  // Strip the SMIL animations and bake static startOffsets so the rasteriser
+  // captures the exact frame we want.
+  clone.querySelectorAll("animate").forEach((a) => a.remove());
+  const textPaths = clone.querySelectorAll("textPath");
+  if (textPaths[0]) textPaths[0].setAttribute("startOffset", `${startOffsetA}%`);
+  if (textPaths[1]) textPaths[1].setAttribute("startOffset", `${startOffsetB}%`);
+
+  // Replace external image references with inlined data URLs so the SVG
+  // renders without further network fetches (and stays untainted on canvas).
+  clone.querySelectorAll("image").forEach((imgEl) => {
+    const href =
+      imgEl.getAttribute("href") || imgEl.getAttribute("xlink:href") || "";
+    if (href.endsWith("LogoText.png")) {
+      imgEl.setAttribute("href", logoDataUrl);
+      imgEl.removeAttribute("xlink:href");
+    } else if (href.endsWith("swiss-knife.png")) {
+      imgEl.setAttribute("href", silhouetteDataUrl);
+      imgEl.removeAttribute("xlink:href");
+    }
+  });
+
+  // Inject the font CSS (with woff2 inlined) so Cormorant Garamond renders
+  // inside the standalone SVG image.
+  const styleEl = document.createElementNS(
+    "http://www.w3.org/2000/svg",
+    "style",
+  );
+  styleEl.textContent = fontCss;
+  clone.insertBefore(styleEl, clone.firstChild);
+
+  return new XMLSerializer().serializeToString(clone);
+}
+
 export default function App() {
   const [showGuides, setShowGuides] = useState(true);
   const [logoWidth, setLogoWidth] = useState(LOGO_DEFAULT_WIDTH);
@@ -61,6 +169,8 @@ export default function App() {
   const [pathScale, setPathScale] = useState(PATH_SCALE_DEFAULT);
   const [lapDurationSec, setLapDurationSec] = useState(LAP_DURATION_DEFAULT);
   const [exporting, setExporting] = useState(false);
+  const [gifProgress, setGifProgress] = useState(null); // null | "frames i/N" | "encoding p%" 
+  const svgRef = useRef(null);
 
   const logoHeight = logoWidth * (LOGO_NATIVE.h / LOGO_NATIVE.w);
   const logoX = (CANVAS_W - logoWidth) / 2;
@@ -80,6 +190,111 @@ export default function App() {
     fill: TEXT_FILL,
     letterSpacing: innerLetterSpacing,
   };
+
+  async function handleExportGif() {
+    if (typeof window === "undefined" || !window.GIF) {
+      alert(
+        "GIF encoder not loaded. The CDN script in index.html may be blocked - check the network tab.",
+      );
+      return;
+    }
+    setGifProgress("preparing...");
+    try {
+      const liveSvg = svgRef.current;
+      if (!liveSvg) throw new Error("SVG element not available yet");
+
+      const aspect =
+        (CANVAS_H + PAD * 2) / (CANVAS_W + PAD * 2);
+      const widthOut = GIF_OUTPUT_WIDTH;
+      const heightOut = Math.round(widthOut * aspect);
+
+      // Pre-fetch everything that's reused across frames.
+      const [fontCss, logoDataUrl, silhouetteDataUrl, workerBlobUrl] =
+        await Promise.all([
+          inlineFontsCss(FONT_STYLESHEET),
+          fetchAsDataUrl("/LogoText.png"),
+          fetchAsDataUrl("/swiss-knife.png"),
+          loadWorkerBlobUrl(),
+        ]);
+
+      const gif = new window.GIF({
+        workers: 2,
+        quality: 8,
+        workerScript: workerBlobUrl,
+        width: widthOut,
+        height: heightOut,
+        repeat: 0, // 0 = loop forever
+        background: GIF_BG,
+      });
+
+      const canvas = document.createElement("canvas");
+      canvas.width = widthOut;
+      canvas.height = heightOut;
+      const ctx = canvas.getContext("2d");
+      const frameDelayMs = (lapDurationSec * 1000) / GIF_FRAME_COUNT;
+
+      // Capture exactly GIF_FRAME_COUNT frames over [0, lapDurationSec).
+      // The (N+1)-th frame would equal the 1st, so the loop is seamless.
+      for (let i = 0; i < GIF_FRAME_COUNT; i++) {
+        const phase = i / GIF_FRAME_COUNT;
+        // Animation goes 100% -> 0% over one lap -> textPath A startOffset:
+        const offsetA = (1 - phase) * 100;
+        // textPath B is one full path-length behind, animating 0% -> -100%:
+        const offsetB = -phase * 100;
+
+        const xml = buildFrameSvg({
+          liveSvg,
+          fontCss,
+          logoDataUrl,
+          silhouetteDataUrl,
+          startOffsetA: offsetA,
+          startOffsetB: offsetB,
+          width: widthOut,
+          height: heightOut,
+        });
+
+        const img = await svgStringToImage(xml);
+        ctx.fillStyle = GIF_BG;
+        ctx.fillRect(0, 0, widthOut, heightOut);
+        ctx.drawImage(img, 0, 0, widthOut, heightOut);
+
+        gif.addFrame(ctx, { copy: true, delay: frameDelayMs });
+        setGifProgress(`frame ${i + 1}/${GIF_FRAME_COUNT}`);
+        // Yield to the event loop so React can repaint the progress text.
+        await new Promise((res) => setTimeout(res, 0));
+      }
+
+      setGifProgress("encoding 0%");
+      gif.on("progress", (p) => {
+        setGifProgress(`encoding ${Math.round(p * 100)}%`);
+      });
+
+      const blob = await new Promise((resolve, reject) => {
+        gif.on("finished", resolve);
+        gif.on("abort", () => reject(new Error("GIF render aborted")));
+        gif.render();
+      });
+
+      URL.revokeObjectURL(workerBlobUrl);
+
+      const downloadUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = downloadUrl;
+      a.download = `swiss-knife-textpath-${new Date()
+        .toISOString()
+        .slice(0, 19)
+        .replace(/[:T]/g, "-")}.gif`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(downloadUrl);
+    } catch (err) {
+      console.error("GIF export failed:", err);
+      alert("GIF export failed: " + (err?.message ?? err));
+    } finally {
+      setGifProgress(null);
+    }
+  }
 
   async function handleExport() {
     setExporting(true);
@@ -279,9 +494,30 @@ export default function App() {
         >
           {exporting ? "Exporting..." : "Export current state"}
         </button>
+
+        <button
+          type="button"
+          onClick={handleExportGif}
+          disabled={gifProgress !== null}
+          style={{
+            fontFamily: TEXT_FONT,
+            fontSize: 16,
+            padding: "8px 14px",
+            border: "1px solid #d30000",
+            borderRadius: 4,
+            background: gifProgress !== null ? "#fcebeb" : "#fff",
+            color: "#d30000",
+            cursor: gifProgress !== null ? "wait" : "pointer",
+          }}
+        >
+          {gifProgress !== null
+            ? `Exporting GIF: ${gifProgress}`
+            : "Export GIF (one lap)"}
+        </button>
       </div>
 
       <svg
+        ref={svgRef}
         viewBox={`-${PAD} -${PAD} ${CANVAS_W + PAD * 2} ${CANVAS_H + PAD * 2}`}
         width="min(95vw, 980px)"
         xmlns="http://www.w3.org/2000/svg"
