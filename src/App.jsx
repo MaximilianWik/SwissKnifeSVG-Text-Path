@@ -49,6 +49,7 @@ async function blobToDataUrl(blob) {
 }
 
 async function fetchAsDataUrl(url) {
+  if (url.startsWith("data:")) return url; // already a data URL (imported state)
   const r = await fetch(url);
   if (!r.ok) throw new Error(`Failed to fetch ${url}: ${r.status}`);
   return blobToDataUrl(await r.blob());
@@ -136,19 +137,21 @@ function buildFrameSvg({
   if (textPaths[0]) textPaths[0].setAttribute("startOffset", `${startOffsetA}%`);
   if (textPaths[1]) textPaths[1].setAttribute("startOffset", `${startOffsetB}%`);
 
-  // Replace external image references with inlined data URLs so the SVG
-  // renders without further network fetches (and stays untainted on canvas).
-  clone.querySelectorAll("image").forEach((imgEl) => {
-    const href =
-      imgEl.getAttribute("href") || imgEl.getAttribute("xlink:href") || "";
-    if (href.endsWith("LogoText.png")) {
-      imgEl.setAttribute("href", logoDataUrl);
-      imgEl.removeAttribute("xlink:href");
-    } else if (href.endsWith("swiss-knife.png")) {
-      imgEl.setAttribute("href", silhouetteDataUrl);
-      imgEl.removeAttribute("xlink:href");
-    }
-  });
+  // Replace image hrefs with inlined data URLs so the SVG renders without
+  // further network fetches (and stays untainted on canvas). Match by
+  // position: the logo is always the LAST image, silhouette (when visible)
+  // is the FIRST image.
+  const images = Array.from(clone.querySelectorAll("image"));
+  const logoImg = images[images.length - 1];
+  const silhImg = images.length > 1 ? images[0] : null;
+  if (logoImg) {
+    logoImg.setAttribute("href", logoDataUrl);
+    logoImg.removeAttribute("xlink:href");
+  }
+  if (silhImg) {
+    silhImg.setAttribute("href", silhouetteDataUrl);
+    silhImg.removeAttribute("xlink:href");
+  }
 
   // Inject the font CSS (with woff2 inlined) so Cormorant Garamond renders
   // inside the standalone SVG image.
@@ -169,8 +172,14 @@ export default function App() {
   const [pathScale, setPathScale] = useState(PATH_SCALE_DEFAULT);
   const [lapDurationSec, setLapDurationSec] = useState(LAP_DURATION_DEFAULT);
   const [exporting, setExporting] = useState(false);
-  const [gifProgress, setGifProgress] = useState(null); // null | "frames i/N" | "encoding p%" 
+  const [gifProgress, setGifProgress] = useState(null);
+  // Overridable via import: path data and asset sources
+  const [outlineD, setOutlineD] = useState(OUTLINE_D);
+  const [outlineOffset, setOutlineOffset] = useState(OUTLINE_OFFSET);
+  const [logoSrc, setLogoSrc] = useState("/LogoText.png");
+  const [silhouetteSrc, setSilhouetteSrc] = useState("/swiss-knife.png");
   const svgRef = useRef(null);
+  const importRef = useRef(null);
 
   const logoHeight = logoWidth * (LOGO_NATIVE.h / LOGO_NATIVE.w);
   const logoX = (CANVAS_W - logoWidth) / 2;
@@ -190,6 +199,50 @@ export default function App() {
     fill: TEXT_FILL,
     letterSpacing: innerLetterSpacing,
   };
+
+  // ---- Import previously exported state ------------------------------------
+  function handleImport(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const config = JSON.parse(ev.target.result);
+        if (config.kind !== "swiss-knife-textpath") {
+          alert(
+            'Not a valid swiss-knife-textpath export file (missing "kind" field).',
+          );
+          return;
+        }
+        const { settings, path: pathData, assets } = config;
+
+        // Restore sliders / checkboxes
+        if (typeof settings?.fontSize === "number") setFontSize(settings.fontSize);
+        if (typeof settings?.pathScale === "number") setPathScale(settings.pathScale);
+        if (typeof settings?.lapDurationSeconds === "number")
+          setLapDurationSec(settings.lapDurationSeconds);
+        if (typeof settings?.logo?.width === "number")
+          setLogoWidth(settings.logo.width);
+        if (typeof settings?.showGuides === "boolean")
+          setShowGuides(settings.showGuides);
+
+        // Restore path
+        if (typeof pathData?.d === "string") setOutlineD(pathData.d);
+        if (pathData?.translate) setOutlineOffset(pathData.translate);
+
+        // Restore assets - use embedded data URLs so no network fetch needed
+        if (typeof assets?.logo?.dataUrl === "string")
+          setLogoSrc(assets.logo.dataUrl);
+        if (typeof assets?.silhouette?.dataUrl === "string")
+          setSilhouetteSrc(assets.silhouette.dataUrl);
+      } catch (err) {
+        alert("Failed to parse export file: " + (err?.message ?? err));
+      }
+    };
+    reader.readAsText(file);
+    // Reset so the same file can be imported again in the same session
+    e.target.value = "";
+  }
 
   async function handleExportGif() {
     if (typeof window === "undefined" || !window.GIF) {
@@ -212,8 +265,8 @@ export default function App() {
       const [fontCss, logoDataUrl, silhouetteDataUrl, workerBlobUrl] =
         await Promise.all([
           inlineFontsCss(FONT_STYLESHEET),
-          fetchAsDataUrl("/LogoText.png"),
-          fetchAsDataUrl("/swiss-knife.png"),
+          fetchAsDataUrl(logoSrc),
+          fetchAsDataUrl(silhouetteSrc),
           loadWorkerBlobUrl(),
         ]);
 
@@ -300,8 +353,8 @@ export default function App() {
     setExporting(true);
     try {
       const [logoDataUrl, silhouetteDataUrl] = await Promise.all([
-        fetchAsDataUrl("/LogoText.png"),
-        fetchAsDataUrl("/swiss-knife.png"),
+        fetchAsDataUrl(logoSrc),
+        fetchAsDataUrl(silhouetteSrc),
       ]);
 
       const settings = {
@@ -335,7 +388,7 @@ export default function App() {
 
       const componentSource = buildComponentSource({
         settings,
-        path: { d: OUTLINE_D, translate: OUTLINE_OFFSET },
+        path: { d: outlineD, translate: outlineOffset },
         logoDataUrl,
         silhouetteDataUrl,
       });
@@ -353,7 +406,7 @@ export default function App() {
         createdAt: new Date().toISOString(),
         fontStylesheetHref: FONT_STYLESHEET,
         settings,
-        path: { d: OUTLINE_D, translate: OUTLINE_OFFSET },
+        path: { d: outlineD, translate: outlineOffset },
         assets: {
           logo: {
             filename: "LogoText.png",
@@ -497,6 +550,29 @@ export default function App() {
 
         <button
           type="button"
+          onClick={() => importRef.current?.click()}
+          style={{
+            fontFamily: TEXT_FONT,
+            fontSize: 16,
+            padding: "8px 14px",
+            border: "1px solid #1a1a1a",
+            borderRadius: 4,
+            background: "#fff",
+            cursor: "pointer",
+          }}
+        >
+          Import state
+        </button>
+        <input
+          ref={importRef}
+          type="file"
+          accept=".json"
+          onChange={handleImport}
+          style={{ display: "none" }}
+        />
+
+        <button
+          type="button"
           onClick={handleExportGif}
           disabled={gifProgress !== null}
           style={{
@@ -525,20 +601,20 @@ export default function App() {
         aria-label="Swiss-army knife outlined by a sentence about creativity and curiosity, looping continuously around the silhouette"
       >
         <defs>
-          <path id="knife-outline" d={OUTLINE_D} />
+          <path id="knife-outline" d={outlineD} />
         </defs>
 
         <g transform={scaleTransform}>
           {showGuides && (
             <image
-              href="/swiss-knife.png"
+              href={silhouetteSrc}
               width={CANVAS_W}
               height={CANVAS_H}
               opacity="0.08"
             />
           )}
 
-          <g transform={`translate(${OUTLINE_OFFSET.x}, ${OUTLINE_OFFSET.y})`}>
+          <g transform={`translate(${outlineOffset.x}, ${outlineOffset.y})`}>
             {showGuides && (
               <use
                 href="#knife-outline"
@@ -581,7 +657,7 @@ export default function App() {
 
         {/* Logo overlay */}
         <image
-          href="/LogoText.png"
+          href={logoSrc}
           x={logoX}
           y={logoY}
           width={logoWidth}
